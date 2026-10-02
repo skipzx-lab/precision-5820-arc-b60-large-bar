@@ -1,0 +1,4 @@
+# Third-party EFI binaries are downloaded, not committed
+*.efi
+*.EFI
+mmioh.log
