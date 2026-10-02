@@ -136,7 +136,7 @@ With the card visible, llama.cpp's SYCL backend (`ghcr.io/ggml-org/llama.cpp:ser
 | 16k | 1,200 | 50.8 |
 | 32k | 1,080 | 43.1 |
 
-It loads at the model's full 262,144-token context (about 23.6 of 23.9GiB VRAM) and passed passphrase-retrieval tests at 8k, 32k, 47k and 123k tokens. The card draws about 105–115W and stays near 60°C under load, on PCIe Gen3 x8.
+It loads at the model's full 262,144-token context (about 23.6 of 23.9GiB VRAM) and passed passphrase-retrieval tests at 8k, 32k, 47k, 123k and 239k tokens (a cold 239k-token prompt takes about 6 minutes to process). The card draws about 105–115W and stays near 60°C under load, on PCIe Gen3 x8.
 
 ## Undo, risks and caveats
 
