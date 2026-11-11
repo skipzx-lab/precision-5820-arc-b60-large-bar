@@ -138,6 +138,57 @@ With the card visible, llama.cpp's SYCL backend (`ghcr.io/ggml-org/llama.cpp:ser
 
 It loads at the model's full 262,144-token context (about 23.6 of 23.9GiB VRAM) and passed passphrase-retrieval tests at 8k, 32k, 47k, 123k and 239k tokens (a cold 239k-token prompt takes about 6 minutes to process). The card draws about 105–115W and stays near 60°C under load, on PCIe Gen3 x8.
 
+## Arc A770 and other DG2 cards: the on-board switch
+
+> 🧪 Being tested on an Arc A770 16GB in the same 5820, next to the B60. This section will be updated with results.
+
+With the BIOS fix in place, an A770 in a second slot still fails to resize, on both `i915` and `xe`:
+
+```
+xe 0000:19:00.0: [drm] Attempting to resize bar from 256MiB -> 16384MiB
+xe 0000:19:00.0: [drm] Failed to resize BAR2 to 16384MiB (-ENOSPC). Consider enabling 'Resizable BAR' support in your BIOS
+```
+
+The root window isn't the problem this time. The A770's stack (bus `16`) gets its full 64GB:
+
+```
+pci_bus 0000:16: root bus resource [mem 0x381000000000-0x381fffffffff window]
+```
+
+The block is on the card. Every Arc card has a small PCIe switch in front of the GPU, and the switch's upstream port has its own 8MB BAR0. The firmware puts it in the same prefetchable window as the GPU's 256MB BAR2:
+
+```
+0000:17:00.0 PCI bridge [0604]: Intel Corporation Device [8086:4fa0] (rev 01)
+        Region 0: Memory at 381ff0000000 (64-bit, prefetchable) [size=8M]
+        Prefetchable memory behind bridge: 381fe0000000-381fefffffff [size=256M]
+```
+
+While that BAR0 is assigned, the PCI core can't release and grow the window above it, so the resize has nowhere to go. Intel posted a kernel quirk that releases this BAR0 on the Arc switch IDs `0x4fa0`, `0x4fa1` (DG2) and `0xe2ff` (Battlemage) ([patch](https://patchew.org/linux/20250918-xe-pci-rebar-2-v1-0-6c094702a074@intel.com/20250918-xe-pci-rebar-2-v1-1-6c094702a074@intel.com)), but it isn't in the kernel tested here.
+
+### The workaround: `arc_switch_quirk`
+
+[`linux/arc-switch-quirk`](linux/arc-switch-quirk) is a small out-of-tree module that does the same job without rebuilding the kernel. At load it finds DG2 switch upstream ports, and for each one whose GPU has a BAR2 smaller than its maximum, it:
+
+1. releases the switch's BAR0, so the window can be resized,
+2. moves the BAR0 register to an unreachable address (2^52), so the switch can't keep decoding its old range once the GPU's larger BAR2 is placed over it. This addresses the main review concern with the upstream patch,
+3. saves the switch's config state, so a power-state restore doesn't put the old address back.
+
+DKMS rebuilds it on kernel updates, and a `softdep` loads it before `xe` and `i915`. It leaves Battlemage switches alone by default, because `xe` already resizes the B60 on this machine. Add them with `ids=0x4fa0,0x4fa1,0xe2ff` if you need it.
+
+```bash
+sudo linux/arc-switch-quirk/install.sh
+sudo modprobe arc_switch_quirk dry_run=1                        # report only, changes nothing
+sudo journalctl -k -b | grep arc_switch_quirk
+sudo reboot
+linux/check.sh
+```
+
+To test without rebooting, `sudo rmmod arc_switch_quirk; sudo modprobe arc_switch_quirk reprobe=1` releases the BAR0 and rebinds the GPU driver so it retries the resize. If that GPU is driving the screen, the console blanks for a moment.
+
+Undo: `sudo linux/arc-switch-quirk/uninstall.sh`, then reboot. The module changes nothing permanent; every reboot starts from the firmware's layout.
+
+Here the A770 runs on `xe`, the same driver as the B60, via `i915.force_probe=!56a0 xe.force_probe=56a0` on the kernel command line. On `xe`, Level Zero hides small-BAR GPUs, so the A770 is missing from `sycl-ls` until the resize works. Removing those two parameters puts it back on `i915`, where a small BAR still works.
+
 ## Undo, risks and caveats
 
 You're changing one stored settings value, not the firmware, so a BIOS reset undoes it.
