@@ -24,6 +24,7 @@
 
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
 
 /* dev_*() messages carry the device's driver name, so tag ours for grep. */
 #define QPFX KBUILD_MODNAME ": "
@@ -79,8 +80,11 @@ static bool gpu_has_small_bar(struct pci_dev *gpu, u64 *cur, u64 *max)
 {
 	int max_size = pci_rebar_get_max_size(gpu, 2);
 
-	if (max_size < 0)
+	if (max_size < 0) {
+		pci_info(gpu, QPFX "can't read the Resizable BAR sizes of BAR2 (%d), skipping\n",
+			 max_size);
 		return false;
+	}
 
 	*cur = pci_resource_len(gpu, 2);
 	*max = pci_rebar_size_to_bytes(max_size);
@@ -140,9 +144,17 @@ static int handle_switch(struct pci_dev *usp, struct pci_dev **gpu_out)
 		return 0;
 	}
 
+	/*
+	 * An idle GPU and its switch can be runtime-suspended, and then the
+	 * ReBAR registers read back empty. Keep them awake, as sysfs does.
+	 */
+	pm_runtime_get_sync(&gpu->dev);
+
 	if (!gpu_has_small_bar(gpu, &cur, &max)) {
-		pci_info(usp, QPFX "GPU %s already has a full-size BAR2, skipping\n",
-			 pci_name(gpu));
+		if (pci_rebar_get_max_size(gpu, 2) >= 0)
+			pci_info(usp, QPFX "GPU %s already has a full-size BAR2, skipping\n",
+				 pci_name(gpu));
+		pm_runtime_put(&gpu->dev);
 		pci_dev_put(gpu);
 		return 0;
 	}
@@ -153,6 +165,7 @@ static int handle_switch(struct pci_dev *usp, struct pci_dev **gpu_out)
 	if (dry_run) {
 		pci_info(usp, QPFX "dry_run: would release BAR0 and park it at %#llx\n",
 			 PARK_ADDR);
+		pm_runtime_put(&gpu->dev);
 		pci_dev_put(gpu);
 		return 1;
 	}
@@ -160,6 +173,7 @@ static int handle_switch(struct pci_dev *usp, struct pci_dev **gpu_out)
 	ret = pci_release_resource(usp, 0);
 	if (ret) {
 		pci_err(usp, QPFX "releasing BAR0 failed (%d), leaving it alone\n", ret);
+		pm_runtime_put(&gpu->dev);
 		pci_dev_put(gpu);
 		return ret;
 	}
@@ -174,6 +188,7 @@ static int handle_switch(struct pci_dev *usp, struct pci_dev **gpu_out)
 	pci_info(usp, QPFX "released BAR0%s; %s can now resize BAR2\n",
 		 ret ? "" : " and parked it", pci_name(gpu));
 
+	pm_runtime_put(&gpu->dev);
 	*gpu_out = gpu;
 	return 1;
 }
