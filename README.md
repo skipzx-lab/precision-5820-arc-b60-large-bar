@@ -140,7 +140,14 @@ It loads at the model's full 262,144-token context (about 23.6 of 23.9GiB VRAM) 
 
 ## Arc A770 and other DG2 cards: the on-board switch
 
-> 🧪 Being tested on an Arc A770 16GB in the same 5820, next to the B60. This section will be updated with results.
+> ✅ Tested on an Arc A770 16GB in the same 5820, next to the B60 (kernel 7.0.0-43, `xe`). With the module below, the A770 boots with a 16GB BAR2 and the B60 keeps its 32GB:
+>
+> ```
+> pcieport 0000:17:00.0: arc_switch_quirk: released BAR0 and parked it; 0000:19:00.0 can now resize BAR2
+> pcieport 0000:16:00.0: bridge window [mem 0x381000000000-0x3813ffffffff 64bit pref]: assigned
+> xe 0000:19:00.0: [drm] BAR2 resized to 16384MiB
+> xe 0000:67:00.0: [drm] BAR2 resized to 32768MiB
+> ```
 
 With the BIOS fix in place, an A770 in a second slot still fails to resize, on both `i915` and `xe`:
 
